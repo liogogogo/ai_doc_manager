@@ -1,10 +1,14 @@
-use super::adapter::{LlmAdapter, LlmError};
+use super::adapter::{ChatMessage, LlmAdapter, LlmError, StreamEvent};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
-/// Models that require chain-of-thought / thinking mode and temperature = 1.0
+const MAX_RETRIES: u32 = 2;
+const RETRY_DELAYS_MS: [u64; 2] = [1000, 3000];
+const CHUNK_TIMEOUT_SECS: u64 = 60;
+
 fn is_thinking_model(model: &str) -> bool {
     let m = model.to_lowercase();
     m.contains("glm-z1")
@@ -17,6 +21,16 @@ fn is_thinking_model(model: &str) -> bool {
         || m == "o1"
         || m == "o3"
         || m.starts_with("o3-")
+}
+
+fn is_retryable(err: &LlmError) -> bool {
+    match err {
+        LlmError::ConnectionError(_) | LlmError::Timeout(_) => true,
+        LlmError::RequestFailed(msg) => {
+            msg.starts_with("HTTP 5") || msg.contains("502") || msg.contains("503") || msg.contains("504")
+        }
+        _ => false,
+    }
 }
 
 #[derive(Serialize)]
@@ -36,12 +50,6 @@ struct ChatRequest {
     thinking: Option<ThinkingConfig>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
@@ -55,7 +63,6 @@ struct ChatChoice {
 #[derive(Deserialize)]
 struct StreamChunkDelta {
     content: Option<String>,
-    /// Thinking/reasoning content returned by models like GLM-5, DeepSeek-R1
     reasoning_content: Option<String>,
 }
 
@@ -79,8 +86,8 @@ pub struct OpenAiCompatibleAdapter {
 impl OpenAiCompatibleAdapter {
     pub fn new(base_url: &str, model: &str, api_key: &str) -> Self {
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(10))
             .build()
             .unwrap_or_else(|_| Client::new());
         Self {
@@ -90,55 +97,34 @@ impl OpenAiCompatibleAdapter {
             api_key: api_key.to_string(),
         }
     }
-}
 
-impl OpenAiCompatibleAdapter {
-    /// Streaming completion with single prompt (convenience wrapper).
-    pub async fn stream_complete<F>(
-        &self,
-        prompt: &str,
-        max_tokens: u32,
-        on_chunk: F,
-    ) -> Result<String, LlmError>
-    where
-        F: FnMut(&str) + Send,
-    {
-        let messages = vec![ChatMessage {
-            role: "user".into(),
-            content: prompt.to_string(),
-        }];
-        self.stream_complete_messages(&messages, max_tokens, on_chunk).await
-    }
-
-    /// Streaming completion with full message history for multi-turn conversations.
-    /// Returns the full assembled assistant reply.
-    pub async fn stream_complete_messages<F>(
-        &self,
-        messages: &[ChatMessage],
-        max_tokens: u32,
-        mut on_chunk: F,
-    ) -> Result<String, LlmError>
-    where
-        F: FnMut(&str) + Send,
-    {
-        // Use a dedicated client without overall timeout for streaming (connection stays open)
-        let stream_client = Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .build()
-            .unwrap_or_else(|_| Client::new());
-
-        let url = format!("{}/chat/completions", self.base_url);
+    fn build_chat_request(&self, messages: &[ChatMessage], max_tokens: u32, stream: bool) -> ChatRequest {
         let thinking = is_thinking_model(&self.model)
             .then(|| ThinkingConfig { thinking_type: "enabled".into() });
         let temperature = if is_thinking_model(&self.model) { 1.0 } else { 0.3 };
-        let req = ChatRequest {
+        ChatRequest {
             model: self.model.clone(),
             messages: messages.to_vec(),
             max_tokens,
             temperature,
-            stream: true,
+            stream,
             thinking,
-        };
+        }
+    }
+
+    async fn do_stream(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        on_event: &mut Box<dyn FnMut(StreamEvent) + Send>,
+    ) -> Result<String, LlmError> {
+        let stream_client = Client::builder()
+            .connect_timeout(Duration::from_secs(15))
+            .build()
+            .unwrap_or_else(|_| Client::new());
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let req = self.build_chat_request(messages, max_tokens, true);
 
         let resp = stream_client
             .post(&url)
@@ -158,29 +144,51 @@ impl OpenAiCompatibleAdapter {
         let mut full_text = String::new();
         let mut stream = resp.bytes_stream();
         let mut buffer = String::new();
+        let chunk_timeout = Duration::from_secs(CHUNK_TIMEOUT_SECS);
 
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| LlmError::ConnectionError(e.to_string()))?;
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+        loop {
+            let maybe_chunk = tokio::time::timeout(chunk_timeout, stream.next()).await;
 
-            // SSE format: lines starting with "data: "
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim().to_string();
-                buffer = buffer[pos + 1..].to_string();
-
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
+            match maybe_chunk {
+                Err(_) => {
+                    return Err(LlmError::Timeout(format!(
+                        "{} 秒未收到新数据",
+                        CHUNK_TIMEOUT_SECS
+                    )));
                 }
+                Ok(None) => break,
+                Ok(Some(chunk_result)) => {
+                    let chunk =
+                        chunk_result.map_err(|e| LlmError::ConnectionError(e.to_string()))?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if data.trim() == "[DONE]" {
-                        break;
-                    }
-                    if let Ok(chunk) = serde_json::from_str::<StreamChunk>(data) {
-                        if let Some(choice) = chunk.choices.first() {
-                            if let Some(ref content) = choice.delta.content {
-                                full_text.push_str(content);
-                                on_chunk(content);
+                    while let Some(pos) = buffer.find('\n') {
+                        let line = buffer[..pos].trim().to_string();
+                        buffer = buffer[pos + 1..].to_string();
+
+                        if line.is_empty() || line.starts_with(':') {
+                            continue;
+                        }
+
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data.trim() == "[DONE]" {
+                                on_event(StreamEvent::Done);
+                                return Ok(full_text);
+                            }
+                            if let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) {
+                                if let Some(choice) = parsed.choices.first() {
+                                    if let Some(ref reasoning) = choice.delta.reasoning_content {
+                                        if !reasoning.is_empty() {
+                                            on_event(StreamEvent::Reasoning(reasoning.clone()));
+                                        }
+                                    }
+                                    if let Some(ref content) = choice.delta.content {
+                                        if !content.is_empty() {
+                                            full_text.push_str(content);
+                                            on_event(StreamEvent::Content(content.clone()));
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -188,6 +196,7 @@ impl OpenAiCompatibleAdapter {
             }
         }
 
+        on_event(StreamEvent::Done);
         Ok(full_text)
     }
 }
@@ -195,57 +204,99 @@ impl OpenAiCompatibleAdapter {
 #[async_trait]
 impl LlmAdapter for OpenAiCompatibleAdapter {
     async fn complete(&self, prompt: &str, max_tokens: u32) -> Result<String, LlmError> {
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: prompt.to_string(),
+        }];
         let url = format!("{}/chat/completions", self.base_url);
-        let thinking = is_thinking_model(&self.model)
-            .then(|| ThinkingConfig { thinking_type: "enabled".into() });
-        let temperature = if is_thinking_model(&self.model) { 1.0 } else { 0.3 };
-        let req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: prompt.to_string(),
-            }],
-            max_tokens,
-            temperature,
-            stream: false,
-            thinking,
-        };
+        let req = self.build_chat_request(&messages, max_tokens, false);
 
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .header("Content-Type", "application/json")
-            .json(&req)
-            .send()
-            .await
-            .map_err(|e| LlmError::ConnectionError(e.to_string()))?;
+        let mut last_err = None;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(LlmError::RequestFailed(format!(
-                "HTTP {} — {}",
-                status, body
-            )));
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay = RETRY_DELAYS_MS[(attempt - 1) as usize];
+                tracing::warn!("LLM request retry #{}, waiting {}ms", attempt, delay);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+
+            let result = self
+                .client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .json(&req)
+                .send()
+                .await;
+
+            match result {
+                Err(e) => {
+                    let err = LlmError::ConnectionError(e.to_string());
+                    if !is_retryable(&err) || attempt == MAX_RETRIES {
+                        return Err(err);
+                    }
+                    last_err = Some(err);
+                }
+                Ok(resp) => {
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.unwrap_or_default();
+                        let err = LlmError::RequestFailed(format!("HTTP {} — {}", status, body));
+                        if !is_retryable(&err) || attempt == MAX_RETRIES {
+                            return Err(err);
+                        }
+                        last_err = Some(err);
+                        continue;
+                    }
+
+                    let body: ChatResponse = resp
+                        .json()
+                        .await
+                        .map_err(|e| LlmError::InvalidResponse(e.to_string()))?;
+
+                    return body
+                        .choices
+                        .first()
+                        .map(|c| c.message.content.clone())
+                        .ok_or_else(|| LlmError::InvalidResponse("empty choices".into()));
+                }
+            }
         }
 
-        let body: ChatResponse = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::InvalidResponse(e.to_string()))?;
+        Err(last_err.unwrap_or_else(|| LlmError::RequestFailed("max retries exceeded".into())))
+    }
 
-        body.choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .ok_or_else(|| LlmError::InvalidResponse("empty choices".into()))
+    async fn stream_complete_messages(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        mut on_event: Box<dyn FnMut(StreamEvent) + Send>,
+    ) -> Result<String, LlmError> {
+        let mut last_err = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay = RETRY_DELAYS_MS[(attempt - 1) as usize];
+                tracing::warn!("LLM stream retry #{}, waiting {}ms", attempt, delay);
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+
+            match self.do_stream(messages, max_tokens, &mut on_event).await {
+                Ok(text) => return Ok(text),
+                Err(e) => {
+                    if !is_retryable(&e) || attempt == MAX_RETRIES {
+                        return Err(e);
+                    }
+                    tracing::warn!("LLM stream attempt {} failed: {}", attempt + 1, e);
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| LlmError::RequestFailed("max retries exceeded".into())))
     }
 
     async fn health_check(&self) -> Result<bool, LlmError> {
-        // Step 1: GET /models — fast check for API key validity and connectivity.
-        // A 401/403 here means the key is definitely wrong; we stop early.
-        // A 200 only means the key is valid — it does NOT verify the specific model
-        // has an available resource package, so we always continue to the chat probe.
         let models_url = format!("{}/models", self.base_url);
         let models_resp = self
             .client
@@ -263,24 +314,23 @@ impl LlmAdapter for OpenAiCompatibleAdapter {
                     status, body
                 )));
             }
-            // Any other outcome (200, 404, network error): fall through to chat probe
             _ => {}
         }
 
-        // Step 2: Minimal chat probe — verifies this specific model is accessible.
-        // For thinking models we deliberately disable thinking to keep costs near-zero
-        // (thinking mode requires a much larger token budget).
         let url = format!("{}/chat/completions", self.base_url);
-        let req = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![ChatMessage {
+        let req = self.build_chat_request(
+            &[ChatMessage {
                 role: "user".into(),
                 content: "hi".into(),
             }],
-            max_tokens: 5,
+            5,
+            false,
+        );
+        // Override thinking for probe: always off
+        let probe_req = ChatRequest {
+            thinking: None,
             temperature: 0.0,
-            stream: false,
-            thinking: None, // always off for the probe
+            ..req
         };
 
         let resp = self
@@ -288,7 +338,7 @@ impl LlmAdapter for OpenAiCompatibleAdapter {
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
-            .json(&req)
+            .json(&probe_req)
             .send()
             .await
             .map_err(|e| LlmError::ConnectionError(e.to_string()))?;

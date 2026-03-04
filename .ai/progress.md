@@ -5,8 +5,8 @@
 
 ## 当前状态
 
-- **最后会话**: 2026-03-01
-- **最后完成**: [Cursor] 合规检查器减法重构
+- **最后会话**: 2026-03-04
+- **最后完成**: [Cursor] LLM 集成全面优化
 - **当前进行中**: 无
 
 ## 已完成里程碑
@@ -23,6 +23,8 @@
 | 2026-03-01 | 合规检查序列化 Bug 修复 | [Cursor] ViolationStatus/Severity/Category 枚举缺少 `#[serde(rename_all)]`，导致前端 `===` 严格比较不匹配，violations 面板始终显示"全部通过" |
 | 2026-03-01 | 合规检查器误报修复 | [Cursor] 25 项扫描结果全为误报：① Strategy 2 跳过 dist/node_modules/target 等构建产物目录 ② test_weakening 增加 raw string 块跟踪 + `pattern_in_string_literal` 检测 ③ config_leak 扩展 `ALLOW_CONFIG_CHECK` 排除列表 + raw string 块跟踪 |
 | 2026-03-01 | 合规检查器减法重构 | [Cursor] 删除 Strategy 2 磁盘扫描 + check_config_leak；test_weakening 限定为 JS/TS 文件并移除复杂 raw string 追踪；walk_dir 去掉 apply_skip 参数；整体从 4 检查项缩减为 3 项（密钥/Scope git diff/测试弱化） |
+| 2026-03-04 | Git 配置完善与 GitHub 推送 | [Cursor] ① 修复 TypeScript 类型错误（未使用变量、null vs undefined）② 清理 git 仓库（移除 7.2GB 的 target/ 构建产物）③ 完善 .gitignore（添加敏感文件、临时文件等）④ 添加 .gitattributes（行尾规范、diff 配置）⑤ 配置 commit-msg hook 验证提交格式 ⑥ 添加 .gitmessage 模板 ⑦ 添加 GitHub PR/Issue 模板 ⑧ 完善 README.md ⑨ 添加 MIT 许可证 ⑩ 成功推送到 https://github.com/liogogogo/ai_doc_manager.git |
+| 2026-03-04 | LLM 集成全面优化 | [Cursor] ① adapter.rs 重构：新增 StreamEvent/ChatMessage/Cancelled/Timeout，trait 统一 stream_complete_messages ② ollama.rs 重写：/api/generate→/api/chat 多轮流式(NDJSON)，chunk 间 60s 超时 ③ openai_compatible.rs 增强：reasoning_content 支持、重试(2 次退避 1s/3s)、chunk 间超时 ④ commands/llm.rs 统一：去掉 Ollama 特殊分支，所有 provider 走 trait 流式 ⑤ 取消机制：CancellationFlag(AtomicBool) + cancel_llm_generation 命令 ⑥ 前端：停止生成按钮、llm-reasoning 事件监听、可折叠推理面板 |
 
 > 更早期的里程碑已归档至 `.ai/archive/`，以保持本文件精简。
 

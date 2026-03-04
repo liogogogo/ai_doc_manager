@@ -1,15 +1,19 @@
 use crate::services::code_sampler;
 use crate::services::llm;
-use crate::services::llm::ChatMessage;
+use crate::services::llm::{ChatMessage, StreamEvent};
 use crate::services::tech_detector::{self, TechScanResult};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager};
 
 /// Managed state: holds multi-turn conversation history for refinement sessions.
 /// Cleared on each new generation, accumulated during refinement.
 pub struct ConversationState(pub Mutex<Vec<ChatMessage>>);
+
+/// Managed state: allows the frontend to cancel an in-progress LLM generation.
+pub struct CancellationFlag(pub Arc<AtomicBool>);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
@@ -81,6 +85,17 @@ pub async fn test_llm_connection(config: LlmConfig) -> Result<bool, String> {
             Err(e.to_string())
         }
     }
+}
+
+/// Cancel an in-progress LLM generation from the frontend.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn cancel_llm_generation(
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let flag = app.state::<CancellationFlag>();
+    flag.0.store(true, Ordering::SeqCst);
+    tracing::info!("LLM generation cancellation requested");
+    Ok(())
 }
 
 /// Generate AGENTS.md content using LLM, with streaming via Tauri events.
@@ -550,67 +565,58 @@ fn fuzzy_match_in_content(content_lower: &str, name: &str) -> bool {
     parts.iter().all(|part| content_lower.contains(part.as_str()))
 }
 
-/// Use streaming for OpenAI-compatible providers with full message history.
+/// Unified streaming for all providers via the LlmAdapter trait.
+/// Emits `llm-chunk` for content, `llm-reasoning` for thinking, and checks the
+/// cancellation flag on each event so the user can abort mid-generation.
 async fn stream_or_complete_messages(
     app: &tauri::AppHandle,
     config: &LlmConfig,
     messages: &[ChatMessage],
 ) -> Result<String, String> {
-    // For OpenAI-compatible providers, use streaming
-    let is_streaming_capable = config.provider != "ollama";
+    let cancel_flag = app.state::<CancellationFlag>();
+    cancel_flag.0.store(false, Ordering::SeqCst);
 
-    if is_streaming_capable {
-        let key = config.api_key.as_deref()
-            .filter(|k| !k.is_empty())
-            .ok_or_else(|| "API Key 未配置".to_string())?;
-        let adapter = crate::services::llm::OpenAiCompatibleAdapter::new(
-            &config.base_url,
-            &config.model,
-            key,
-        );
-        let app_clone = app.clone();
-        let result = adapter
-            .stream_complete_messages(messages, config.max_tokens_per_request, move |chunk| {
-                let _ = app_clone.emit("llm-chunk", chunk);
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("LLM streaming failed: {}", e);
-                e.to_string()
-            })?;
-        Ok(result)
-    } else {
-        // Fallback for Ollama: merge system + user messages into a single prompt
-        // so the system prompt is not silently discarded
-        let merged_prompt = messages.iter()
-            .filter(|m| m.role == "system" || m.role == "user")
-            .map(|m| {
-                if m.role == "system" {
-                    format!("[System Instructions]\n{}\n[End System Instructions]\n", m.content)
-                } else {
-                    m.content.clone()
+    let adapter = llm::create_adapter(
+        &config.provider,
+        &config.base_url,
+        &config.model,
+        config.api_key.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let app_clone = app.clone();
+    let flag = cancel_flag.0.clone();
+
+    let result = adapter
+        .stream_complete_messages(
+            messages,
+            config.max_tokens_per_request,
+            Box::new(move |event| {
+                if flag.load(Ordering::SeqCst) {
+                    return;
                 }
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let adapter = llm::create_adapter(
-            &config.provider,
-            &config.base_url,
-            &config.model,
-            config.api_key.as_deref(),
+                match event {
+                    StreamEvent::Content(ref c) => {
+                        let _ = app_clone.emit("llm-chunk", c);
+                    }
+                    StreamEvent::Reasoning(ref r) => {
+                        let _ = app_clone.emit("llm-reasoning", r);
+                    }
+                    StreamEvent::Done => {}
+                }
+            }),
         )
-        .map_err(|e| e.to_string())?;
+        .await
+        .map_err(|e| {
+            tracing::error!("LLM streaming failed: {}", e);
+            e.to_string()
+        })?;
 
-        let result = adapter
-            .complete(&merged_prompt, config.max_tokens_per_request)
-            .await
-            .map_err(|e| {
-                tracing::error!("LLM generation failed: {}", e);
-                e.to_string()
-            })?;
-        Ok(result)
+    if cancel_flag.0.load(Ordering::SeqCst) {
+        tracing::info!("LLM generation was cancelled, returning partial result (len={})", result.len());
     }
+
+    Ok(result)
 }
 
 fn load_llm_config(app: &tauri::AppHandle) -> Result<LlmConfig, String> {

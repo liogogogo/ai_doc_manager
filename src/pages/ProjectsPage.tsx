@@ -26,6 +26,10 @@ import {
   Shield,
   Activity,
   RefreshCw,
+  StopCircle,
+  Brain,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 // --- Types matching Rust backend ---
@@ -1505,6 +1509,11 @@ function InitWizardModal({
   const streamBufferRef = useRef("");
   const [streamingContent, setStreamingContent] = useState<string | null>(null);
 
+  // Reasoning/thinking state (for DeepSeek R1 and similar models)
+  const reasoningBufferRef = useRef("");
+  const [reasoningContent, setReasoningContent] = useState<string | null>(null);
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
+
   // Editor refs for line-number sync and auto-scroll
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -1516,10 +1525,16 @@ function InitWizardModal({
       streamBufferRef.current += event.payload;
       setStreamingContent(streamBufferRef.current);
     });
+    const unlistenReasoning = listen<string>("llm-reasoning", (event) => {
+      reasoningBufferRef.current += event.payload;
+      setReasoningContent(reasoningBufferRef.current);
+      if (!reasoningExpanded) setReasoningExpanded(true);
+    });
     return () => {
       unlistenChunk.then((f) => f());
+      unlistenReasoning.then((f) => f());
     };
-  }, []);
+  }, []); // eslint-disable-line
 
   // Auto-scroll to bottom during streaming, unless user scrolled away
   useEffect(() => {
@@ -1677,11 +1692,22 @@ function InitWizardModal({
     return { hint: extractApiMessage(raw), raw };
   };
 
+  const handleStopGeneration = useCallback(async () => {
+    try {
+      await invoke("cancel_llm_generation");
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const handleLlmGenerate = useCallback(async () => {
     setIsGenerating(true);
     setLlmError(null);
     streamBufferRef.current = "";
     setStreamingContent("");
+    reasoningBufferRef.current = "";
+    setReasoningContent(null);
+    setReasoningExpanded(false);
     try {
       const content = await invoke<string>("generate_agents_md_llm", {
         root_path: scan.root_path,
@@ -1719,6 +1745,9 @@ function InitWizardModal({
     setLlmError(null);
     streamBufferRef.current = "";
     setStreamingContent("");
+    reasoningBufferRef.current = "";
+    setReasoningContent(null);
+    setReasoningExpanded(false);
     const prevContent = agentsFile?.content || "";
     try {
       const content = await invoke<string>("refine_agents_md", {
@@ -2005,6 +2034,38 @@ function InitWizardModal({
             <span>{isRefining ? "AI 正在优化" : providerLabel + " 正在生成"}</span>
             <span className="text-violet-400">·</span>
             <span className="font-mono">{streamingContent.length} 字符</span>
+            <button
+              onClick={handleStopGeneration}
+              className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <StopCircle className="h-3 w-3" />
+              停止生成
+            </button>
+          </div>
+        )}
+
+        {/* Reasoning/thinking panel (DeepSeek R1, etc.) */}
+        {reasoningContent && (
+          <div className="border-b border-amber-100 bg-amber-50/50 shrink-0">
+            <button
+              onClick={() => setReasoningExpanded(!reasoningExpanded)}
+              className="flex w-full items-center gap-2 px-5 py-1.5 text-[11px] text-amber-700 hover:bg-amber-50 transition-colors"
+            >
+              <Brain className="h-3 w-3" />
+              <span className="font-medium">AI 推理过程</span>
+              <span className="text-amber-500">·</span>
+              <span className="font-mono">{reasoningContent.length} 字符</span>
+              {reasoningExpanded ? (
+                <ChevronUp className="ml-auto h-3 w-3" />
+              ) : (
+                <ChevronDown className="ml-auto h-3 w-3" />
+              )}
+            </button>
+            {reasoningExpanded && (
+              <pre className="max-h-48 overflow-auto px-5 pb-3 text-[12px] leading-relaxed text-amber-800/70 italic whitespace-pre-wrap">
+                {reasoningContent}
+              </pre>
+            )}
           </div>
         )}
 

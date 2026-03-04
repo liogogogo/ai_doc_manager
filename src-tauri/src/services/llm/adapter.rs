@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,21 +12,49 @@ pub enum LlmError {
     InvalidResponse(String),
     #[error("LLM not configured: {0}")]
     NotConfigured(String),
+    #[error("Generation cancelled")]
+    Cancelled,
+    #[error("LLM timeout: {0}")]
+    Timeout(String),
+}
+
+/// Events emitted during streaming, distinguishing normal content from reasoning.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    Content(String),
+    Reasoning(String),
+    Done,
+}
+
+/// Shared message type used by all adapters for multi-turn conversations.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
 }
 
 #[async_trait]
 pub trait LlmAdapter: Send + Sync {
-    /// Send a prompt and get a text response
+    /// Send a prompt and get a text response (non-streaming).
     async fn complete(&self, prompt: &str, max_tokens: u32) -> Result<String, LlmError>;
 
-    /// Check if the LLM service is reachable
+    /// Streaming completion with full message history.
+    /// Calls `on_event` for each incremental chunk; returns the full assembled text.
+    async fn stream_complete_messages(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        on_event: Box<dyn FnMut(StreamEvent) + Send>,
+    ) -> Result<String, LlmError>;
+
+    /// Check if the LLM service is reachable.
     async fn health_check(&self) -> Result<bool, LlmError>;
 
-    /// Get the provider name
+    /// Get the provider name.
     fn provider_name(&self) -> &str;
 }
 
-/// Build the appropriate LLM adapter from config
+/// Build the appropriate LLM adapter from config.
 pub fn create_adapter(
     provider: &str,
     base_url: &str,

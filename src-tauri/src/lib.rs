@@ -42,6 +42,11 @@ pub fn run() {
             // Initialize conversation state for multi-turn LLM sessions
             app.manage(commands::llm::ConversationState(std::sync::Mutex::new(Vec::new())));
 
+            // Initialize LLM cancellation flag
+            app.manage(commands::llm::CancellationFlag(
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -64,6 +69,7 @@ pub fn run() {
             commands::llm::save_llm_config,
             commands::llm::get_llm_config,
             commands::llm::test_llm_connection,
+            commands::llm::cancel_llm_generation,
             commands::llm::generate_agents_md_llm,
             commands::llm::refine_agents_md,
             commands::llm::check_governance_freshness,
