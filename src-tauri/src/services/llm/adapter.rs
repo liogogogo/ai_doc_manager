@@ -40,10 +40,12 @@ pub trait LlmAdapter: Send + Sync {
 
     /// Streaming completion with full message history.
     /// Calls `on_event` for each incremental chunk; returns the full assembled text.
+    /// The `cancel_flag` can be toggled to gracefully stop reading further chunks.
     async fn stream_complete_messages(
         &self,
         messages: &[ChatMessage],
         max_tokens: u32,
+        cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
         on_event: Box<dyn FnMut(StreamEvent) + Send>,
     ) -> Result<String, LlmError>;
 

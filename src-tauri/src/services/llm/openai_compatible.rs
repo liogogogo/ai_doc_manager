@@ -116,6 +116,7 @@ impl OpenAiCompatibleAdapter {
         &self,
         messages: &[ChatMessage],
         max_tokens: u32,
+        cancel_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
         on_event: &mut Box<dyn FnMut(StreamEvent) + Send>,
     ) -> Result<String, LlmError> {
         let stream_client = Client::builder()
@@ -147,6 +148,10 @@ impl OpenAiCompatibleAdapter {
         let chunk_timeout = Duration::from_secs(CHUNK_TIMEOUT_SECS);
 
         loop {
+            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                on_event(StreamEvent::Done);
+                return Ok(full_text);
+            }
             let maybe_chunk = tokio::time::timeout(chunk_timeout, stream.next()).await;
 
             match maybe_chunk {
@@ -270,6 +275,7 @@ impl LlmAdapter for OpenAiCompatibleAdapter {
         &self,
         messages: &[ChatMessage],
         max_tokens: u32,
+        cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
         mut on_event: Box<dyn FnMut(StreamEvent) + Send>,
     ) -> Result<String, LlmError> {
         let mut last_err = None;
@@ -281,7 +287,10 @@ impl LlmAdapter for OpenAiCompatibleAdapter {
                 tokio::time::sleep(Duration::from_millis(delay)).await;
             }
 
-            match self.do_stream(messages, max_tokens, &mut on_event).await {
+            match self
+                .do_stream(messages, max_tokens, &cancel_flag, &mut on_event)
+                .await
+            {
                 Ok(text) => return Ok(text),
                 Err(e) => {
                     if !is_retryable(&e) || attempt == MAX_RETRIES {

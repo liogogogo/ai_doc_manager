@@ -591,6 +591,7 @@ async fn stream_or_complete_messages(
         .stream_complete_messages(
             messages,
             config.max_tokens_per_request,
+            flag.clone(),
             Box::new(move |event| {
                 if flag.load(Ordering::SeqCst) {
                     return;

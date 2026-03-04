@@ -112,6 +112,7 @@ impl LlmAdapter for OllamaAdapter {
         &self,
         messages: &[ChatMessage],
         max_tokens: u32,
+        cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
         mut on_event: Box<dyn FnMut(StreamEvent) + Send>,
     ) -> Result<String, LlmError> {
         let stream_client = Client::builder()
@@ -148,6 +149,10 @@ impl LlmAdapter for OllamaAdapter {
         let chunk_timeout = Duration::from_secs(60);
 
         loop {
+            if cancel_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                on_event(StreamEvent::Done);
+                return Ok(full_text);
+            }
             let maybe_chunk = tokio::time::timeout(chunk_timeout, stream.next()).await;
 
             match maybe_chunk {

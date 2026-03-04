@@ -1514,6 +1514,9 @@ function InitWizardModal({
   const [reasoningContent, setReasoningContent] = useState<string | null>(null);
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
 
+  // Track whether user has requested cancellation so we can stop the spinner immediately
+  const cancelRequestedRef = useRef(false);
+
   // Editor refs for line-number sync and auto-scroll
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const gutterRef = useRef<HTMLDivElement>(null);
@@ -1693,14 +1696,21 @@ function InitWizardModal({
   };
 
   const handleStopGeneration = useCallback(async () => {
+    // Optimistically update UI so the spinner/status条立即消失
+    cancelRequestedRef.current = true;
+    setIsGenerating(false);
+    setIsRefining(false);
+    setStreamingContent(null);
+    streamBufferRef.current = "";
     try {
       await invoke("cancel_llm_generation");
     } catch {
-      // ignore
+      // ignore backend cancellation errors
     }
   }, []);
 
   const handleLlmGenerate = useCallback(async () => {
+    cancelRequestedRef.current = false;
     setIsGenerating(true);
     setLlmError(null);
     streamBufferRef.current = "";
@@ -1741,6 +1751,7 @@ function InitWizardModal({
   const handleRefine = async () => {
     if (!refineFeedback.trim()) return;
     const feedbackText = refineFeedback.trim();
+    cancelRequestedRef.current = false;
     setIsRefining(true);
     setLlmError(null);
     streamBufferRef.current = "";
