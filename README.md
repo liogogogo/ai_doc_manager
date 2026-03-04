@@ -1,72 +1,131 @@
-# DocGuardian
+# AI Doc Manager
 
-> AI 自动化流程下的文档健康管理工具 · macOS 桌面应用 · v0.5
+基于 Tauri 的 AI 文档治理桌面应用，用于管理代码与文档的一致性、冲突检测和内存 GC。
 
-DocGuardian 为任意项目**从零生成 AI 治理框架**（AGENTS.md），并**持续监控文档健康度**——自动执行记忆垃圾回收、知识冲突检测、隐式规则提取和冗余清理，确保 AI 编码助手始终获得高纯度的上下文输入。
+## 🎯 项目说明
 
-## 核心功能
+本项目旨在通过 AI 辅助的方式，帮助开发团队维护代码与文档的一致性，检测潜在冲突，并提供智能的内存管理建议。
 
-| 功能 | 状态 | 描述 |
-|------|------|------|
-| **F0: Project Initializer** | ✅ | 扫描项目技术栈 → 确定性规则引擎生成基础 AGENTS.md + progress.md + .docguardian.toml |
-| **F5: LLM 智能生成** | ✅ | 12 章节体系 + 流式输出 + 多轮会话优化 + 选中定向优化 |
-| **F6: 偏差检测** | ✅ | 三态徽标（未初始化/需更新/已治理）+ 偏差详情 + AI 增量更新建议 |
-| **增强扫描** | ✅ | 依赖树深度解析（npm + Cargo）+ CI 配置解析（GitHub Actions / GitLab） |
-| F1: Memory GC | 🔜 | 自动归档已完结的进度条目，维持工作记忆在容量上限内 |
-| F2: Rule Extractor | 🔜 | 从失败日志中提取反复出现的错误模式，建议新增编码规则 |
-| F3: Conflict Detector | 🔜 | 语义比对代码变更与文档，标记过时/冲突的描述 |
-| F4: Redundancy Pruner | 🔜 | 识别可被 linter/脚本替代的自然语言文档，建议删除或重写 |
+## 📁 项目结构
 
-## 技术栈
+```
+ai_doc_manager/
+├── src/              # 前端 React + TypeScript 源码
+├── src-tauri/        # 后端 Rust 源码
+├── docs/             # 项目文档
+├── .githooks/        # Git hooks（pre-commit 等）
+├── .github/          # GitHub 配置（PR/Issue 模板）
+├── .ai/              # AI 会话记忆
+├── AGENTS.md         # AI 编码助手治理文件
+└── README.md         # 本文件
+```
 
-- **桌面框架**: Tauri 2.0 (Rust + WebView)
-- **前端**: React 18 + TypeScript + TailwindCSS + Zustand
-- **后端**: Rust (SQLite, git2, notify, pulldown-cmark)
-- **LLM**: 可插拔适配器 — OpenAI / Claude / 智谱GLM / DeepSeek / Ollama / 自定义 API（支持流式+完整模式）
+## 🚀 快速开始
 
-## 前置条件
+### 前置要求
 
-- macOS 10.15+
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://rustup.rs/) 1.77+
-- [Tauri CLI](https://tauri.app/): `cargo install tauri-cli`
+- Node.js >= 18.0.0
+- Rust >= 1.75.0
+- npm 或 yarn
 
-## 快速开始
+### 安装依赖
 
 ```bash
 # 安装前端依赖
 npm install
 
-# 开发模式（同时启动前端 + Rust 后端）
-cargo tauri dev
-
-# 构建发布版本
-cargo tauri build
+# 配置 Git Hooks
+git config core.hooksPath .githooks
 ```
 
-## 项目结构
+### 开发运行
 
-```
-ai_doc_manager/
-├── src/                  # React 前端
-│   ├── pages/            # 页面组件
-│   ├── components/       # UI 组件
-│   ├── stores/           # Zustand 状态管理
-│   └── hooks/            # 自定义 Hooks
-├── src-tauri/            # Rust 后端
-│   └── src/
-│       ├── core/         # 七大核心引擎
-│       ├── commands/     # Tauri IPC 命令
-│       ├── services/     # 共享服务层
-│       └── models/       # 数据模型
-├── docs/design/          # 产品与技术设计文档
-└── AGENTS.md             # AI 编码宪法
+```bash
+# 启动开发服务器（前端 + 后端）
+npm run tauri dev
 ```
 
-## 配置
+### 构建
 
-首次接入项目后，DocGuardian 会在项目根目录生成 `.docguardian.toml`，详见 [产品设计文档](docs/design/product-spec.md#五项目配置文件格式)。
+```bash
+# 构建生产版本
+npm run tauri build
+```
 
-## License
+## 🔧 开发指南
 
-MIT
+### Git Hooks
+
+项目配置了以下 git hooks：
+
+- **pre-commit**: 提交前自动检查
+  - 硬编码密钥扫描
+  - 范围边界检查
+  - 测试弱化检查
+  - TypeScript 类型检查
+  - Rust 编译检查
+
+- **commit-msg**: 提交信息格式验证
+  - 遵循 Conventional Commits 规范
+  - 格式: `<type>(<scope>): <subject>`
+
+### Commit Message 规范
+
+```
+feat(frontend): 添加用户登录功能
+fix(backend): 修复数据库连接泄漏
+docs: 更新 API 文档
+style: 代码格式化
+refactor(core): 重构冲突检测逻辑
+perf: 优化启动速度
+test: 添加单元测试
+chore: 更新依赖版本
+```
+
+详见 `.gitmessage` 文件。
+
+### AI 编码规范
+
+本项目使用 `AGENTS.md` 文件来治理 AI 编码助手的行为，包括：
+
+- ✏️ 白名单：AI 可读写的文件
+- 👁️ 只读区：AI 仅可读取的配置文件
+- 🚫 黑名单：AI 禁止访问的目录
+- 安全红线、编码风格、验证命令等
+
+使用 AI 编码助手（如 Cursor, GitHub Copilot）前，请先阅读 `AGENTS.md`。
+
+## 📖 技术栈
+
+- **前端**: React 18 + TypeScript + Vite + Tailwind CSS
+- **后端**: Rust + Tauri 2.x
+- **状态管理**: Zustand
+- **数据库**: SQLite (通过 rusqlite)
+- **图标**: lucide-react
+
+## 🤝 贡献指南
+
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'feat: Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 创建 Pull Request
+
+请确保：
+- ✅ 所有 pre-commit checks 通过
+- ✅ 遵循 Commit Message 规范
+- ✅ 更新相关文档
+- ✅ 添加必要的测试
+
+## 📄 许可证
+
+本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
+
+## 🙏 致谢
+
+感谢所有贡献者对本项目的支持！
+
+## 📞 联系方式
+
+- GitHub Issues: [https://github.com/liogogogo/ai_doc_manager/issues](https://github.com/liogogogo/ai_doc_manager/issues)
+- Email: 705110706@qq.com

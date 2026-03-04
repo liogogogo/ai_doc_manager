@@ -1,0 +1,51 @@
+#!/bin/bash
+# Commit message hook - 验证 commit message 格式
+# 可选启用：ln -s ../../.githooks/commit-msg .git/hooks/commit-msg
+
+COMMIT_MSG_FILE=$1
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+# 跳过 merge commits
+if echo "$COMMIT_MSG" | grep -qE "^Merge"; then
+    exit 0
+fi
+
+# 跳过注释行和空行
+if echo "$COMMIT_MSG" | grep -qE "^#|^$"; then
+    exit 0
+fi
+
+# 验证格式: type(scope): subject 或 type: subject
+if ! echo "$COMMIT_MSG" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|chore|revert)(\(.+\))?: .{1,}"; then
+    echo "❌ Commit message 格式不符合规范"
+    echo ""
+    echo "正确格式: <type>(<scope>): <subject>"
+    echo ""
+    echo "Type 可选值: feat, fix, docs, style, refactor, perf, test, chore, revert"
+    echo "Scope 可选，例如: frontend, backend, docs"
+    echo ""
+    echo "示例:"
+    echo "  feat(frontend): 添加用户登录功能"
+    echo "  fix(backend): 修复数据库连接泄漏问题"
+    echo "  docs: 更新 README 文档"
+    echo ""
+    echo "参考: .gitmessage"
+    exit 1
+fi
+
+# 验证 subject 长度（建议 50 字符以内，中文按 2 字符计）
+SUBJECT=$(echo "$COMMIT_MSG" | head -n1)
+SUBJECT_LENGTH=$(echo "$SUBJECT" | wc -m | tr -d ' ')
+
+if [ "$SUBJECT_LENGTH" -gt 100 ]; then
+    echo "⚠️  警告: Commit message 主题过长 (${SUBJECT_LENGTH} 字符)"
+    echo "建议: 保持在 50 字符以内（中文约 25 字）"
+    echo ""
+    echo "是否继续？(y/N)"
+    read -r response
+    if [[ ! "$response" =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+exit 0

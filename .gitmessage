@@ -1,0 +1,40 @@
+# Git Commit Message 规范
+
+# 格式: <type>(<scope>): <subject>
+#
+# Type 类型:
+#   feat:     新功能
+#   fix:      修复 bug
+#   docs:     文档更新
+#   style:    代码格式（不影响代码运行）
+#   refactor: 重构（既不是新增功能，也不是修复 bug）
+#   perf:     性能优化
+#   test:     添加/修改测试
+#   chore:    构建过程或辅助工具的变动
+#   revert:   回退
+#
+# Scope 范围（可选）:
+#   frontend, backend, docs, config, hooks, etc.
+#
+# Subject 主题:
+#   - 简明扼要（建议 50 字符内）
+#   - 使用中文或英文
+#   - 描述"做了什么"而不是"怎么做的"
+#
+# Body 正文（可选，需空一行）:
+#   - 详细描述变更的原因和内容
+#   - 可以分多行
+#
+# Footer 页脚（可选，需空一行）:
+#   - 关联 Issue: Closes #123, Refs #456
+#   - Breaking Changes: BREAKING CHANGE: xxx
+#
+# 示例:
+#   feat(frontend): 添加冲突检测实时预览功能
+#
+#   实现了冲突检测结果的实时预览，包括:
+#   - 代码高亮显示
+#   - 侧边栏快速导航
+#   - 自动滚动到冲突位置
+#
+#   Closes #42
