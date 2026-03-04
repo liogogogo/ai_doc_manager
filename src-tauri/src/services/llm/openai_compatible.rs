@@ -189,8 +189,18 @@ impl OpenAiCompatibleAdapter {
                                     }
                                     if let Some(ref content) = choice.delta.content {
                                         if !content.is_empty() {
-                                            full_text.push_str(content);
-                                            on_event(StreamEvent::Content(content.clone()));
+                                            let prefix_len = full_text.len();
+                                            let slice = if content.len() >= prefix_len
+                                                && &content[..prefix_len] == full_text
+                                            {
+                                                &content[prefix_len..]
+                                            } else {
+                                                content.as_str()
+                                            };
+                                            if !slice.is_empty() {
+                                                full_text.push_str(slice);
+                                                on_event(StreamEvent::Content(slice.to_string()));
+                                            }
                                         }
                                     }
                                 }
