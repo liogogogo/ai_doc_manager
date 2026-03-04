@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Default capability for DocGuardian","local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","dialog:default","notification:default","fs:default","fs:allow-read-dir","fs:allow-read-file","fs:allow-write-file","fs:allow-create","fs:allow-exists","fs:allow-mkdir"]}}

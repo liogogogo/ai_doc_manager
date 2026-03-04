@@ -1,0 +1,70 @@
+# DocGuardian 项目配置
+# 生成日期: 2026-02-28
+# 技术栈: Rust, TypeScript
+# 框架: Tauri, React
+
+[project]
+name = "ai_doc_manager"
+root_path = "/Users/cc/Documents/trae_projects/ai_doc_manager"
+
+# 四层文档模型
+[layers]
+# 宪法与边界层（AI 编码约束）
+rule_paths = ["AGENTS.md"]
+# 状态与记忆层（AI 工作记忆，需定期 GC）
+state_paths = [".ai/progress.md"]
+state_capacity = 100  # 行数上限，超出自动触发 GC
+archive_dir = ".ai/archive"
+# 契约与蓝图层（设计文档、API 规范）
+contract_paths = ["docs/design/*.md"]
+# 决策快照层（架构决策记录，只读）
+decision_paths = ["docs/adr/*.md"]
+
+# 扫描配置
+[scan]
+# 扫描时排除的目录（glob 格式）
+exclude_dirs = ["node_modules", "target", "dist", ".git", "__pycache__"]
+# 依赖树深度解析
+parse_dependencies = true
+# CI 配置解析
+parse_ci_config = true
+
+# 记忆垃圾回收配置
+[gc]
+enabled = true
+interval_minutes = 30
+auto_commit = false
+commit_message_template = "docs(gc): archive completed items from {source}"
+
+# 治理框架偏差检测 (F6)
+[governance]
+# 自动检测 AGENTS.md 与项目现状的偏差
+drift_detection = true
+# 检测维度: language, framework, tool, directory, section, ci, testing
+drift_dimensions = ["language", "framework", "tool", "directory", "section", "ci", "testing"]
+
+# 知识冲突检测 (F3)
+[conflict_detection]
+enabled = false  # Phase 3 启用
+exclude_paths = ["docs/adr/*"]  # ADR 只读，不检测冲突
+
+# 隐式规则提取 (F2)
+[rule_extraction]
+enabled = false  # Phase 2 启用
+failure_log = ".ai/failures.jsonl"
+min_frequency = 3
+target_files = ["AGENTS.md"]
+
+# 冗余文档清理 (F4)
+[pruner]
+enabled = false  # Phase 4 启用
+interval_days = 7
+scan_extensions = ["md", "txt", "rst"]
+
+# LLM 配置（留空则使用全局 ~/.docguardian/llm_config.json）
+[llm]
+# provider = "ollama"  # openai | claude | zhipu | deepseek | ollama | custom
+# model = "llama3.1:8b"
+# base_url = "http://localhost:11434"
+# api_key = ""  # 建议使用环境变量而非硬编码
+max_tokens_per_request = 4096
